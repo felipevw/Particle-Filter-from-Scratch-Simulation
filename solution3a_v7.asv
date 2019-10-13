@@ -1,0 +1,280 @@
+%Mobile Robots Project 3: Solution3a
+%Felipe Verdes Wolukanis
+
+%-----------------------------------------------------
+function [forwBackVel, leftRightVel, rotVel, finish] = solution3a_v6(...
+    pts, contacts, delta_position, delta_orientation, varargin)
+    %Run the code with: 
+    %run_simulation_odom(@solution3a_v6, false)
+    %-----------------------------------------------------
+    
+    % Read the map and get its parameters
+    map = imread('vrep_env/exercise02.png');
+    [size_y, size_x] = size(map);
+    
+    % Set the range of the axes
+    % The image will be stretched to this
+    min_x = - 7.5;
+    max_x = 7.5;
+    min_y = - 7.5;
+    max_y = 7.5;
+    
+    % Number of particles and weights
+    N = 10000;
+    
+    % Parameters to keep the distance with the wall and its velocity gains  
+    wallDist = 0.75;
+    gain = 3;
+    gainFi = 10;
+    
+    
+    % Declaration of the the persistent variable for the Finite
+    % State Machine (FSM)
+    persistent pf;
+    persistent state;
+    persistent count;
+    
+    % Finite State Machine
+    c = 10;
+    
+    % Initial State
+    if isempty(state)     
+        % Plot the map
+        imagesc([min_x max_x], [min_y max_y], map);
+        axis xy
+        hold on;
+        colormap(gray); 
+        
+        % Initialize the Kalman Filter matrix
+        pf = [rand(1, N) * (max_x - min_x) + min_x;...
+              rand(1, N) * (max_y - min_y) + min_y; wrapToPi(rand(1, N) * 2 * pi)]';
+          
+        % Place particles in the pixels of the map  
+        x_map = uint8(round(size_x * ((pf(:, 1) - min_x) / (max_x - min_x))));
+        y_map = uint8(round(size_y * ((pf(:, 2) - min_y) / (max_y - min_x))));
+        
+        % Correct particles that get outside of the limits of the map
+        p = zeros(N, 1);
+        for i = 1:N
+            if x_map(i) <= 0
+                x_map(i) = 1;
+                
+            elseif 100 <= x_map(i)
+                x_map(i) = 100;   
+            end   
+            
+            if y_map(i) <= 0
+                y_map(i) = 1;
+                
+            elseif 100 <= y_map(i)
+                y_map(i) = 100;
+            end
+            
+            if map(y_map(i), x_map(i)) == 0
+                p(i) = 1; 
+            end     
+        end
+        
+        % Sorting the good vs the bad particles
+        bad = find(p==1);
+        good = find(p==0);
+        
+        % Correction applied to the bad pixels
+        for i = 1:size(bad)
+            pf(bad(i), :) = pf(randsample(good, 1), :) + ...
+                [rand * 0.2 - 0.1, rand * 0.2 - 0.1,...
+                rand * 0.1 * pi / 180 - 0.05 * pi / 180];         
+        end
+        
+        % Mean of all the particles
+        M = [mean(pf(:, 1)), mean(pf(:, 2)), mean(pf(:, 3))];
+        
+        % Plot on top of the map all the particles (blue)
+        plot(pf(:, 1), pf(:, 2), 'bo', 'MarkerSize', 2, 'markerfacecolor', 'b')
+        hold on
+        
+        % Plot on top of the map of the mean of all the particles (red)
+        plot(M(1), M(2), 'ro', 'MarkerSize', 2, 'markerfacecolor', 'r')
+        
+        % Pass to the initial state
+        state = 'init';
+    end
+
+    % Initialize the robot control variables (returned by this function)
+    finish = false;
+    forwBackVel = 0;
+    leftRightVel = 0;
+    rotVel = 0;
+
+    % Get the laser contact points in sensor's coordinates
+    points = [pts(1, contacts)' pts(2, contacts)'];
+    
+    % Calculate the distances of the laser
+    distances = (pts(1, contacts)'.^2 + pts(2, contacts)'.^2).^0.5;
+    
+    % Get the closest point of all the laser beams
+    [min_value, min_index] = min(distances(:));
+        
+    % Initial state of the FSM
+    if strcmp(state, 'init')
+        state = 'move';
+        fprintf('changing FSM state to %s\n', state);
+        
+    % Moving towards the wall state of the FSM    
+    elseif strcmp(state, 'move')
+        
+        % Kalman Filter prediction
+        pf = [pf(:, 1) + (delta_position(1) * cos(pf(:, 3) + delta_orientation)...
+           - delta_position(2) * sin(pf(:, 3) + delta_orientation)),...
+             pf(:, 2) + (delta_position(1) * sin(pf(:, 3) + delta_orientation)...
+             + delta_position(2) * cos(pf(:, 3) + delta_orientation)),...
+             pf(:, 3) + delta_orientation]...
+             + [rand * 0.001 - 0.0005, rand * 0.001 - 0.0005,...
+             rand * 0.001 * pi / 180 - 0.0005 * pi / 180];
+         
+        % Place particles in the pixels of the map  
+        x_map = uint8(round(size_x * ((pf(:, 1) - min_x) / (max_x - min_x))));
+        y_map = uint8(round(size_y * ((pf(:, 2) - min_y) / (max_y - min_x))));
+        
+        % Correct particles that get outside of the limits of the map
+        p = zeros(N, 1);
+        for i = 1:N
+            if x_map(i) <= 0
+                x_map(i)=1;
+                
+            elseif 100 <= x_map(i)
+                x_map(i) = 100;
+            end 
+            
+            if y_map(i) <= 0
+                y_map(i) = 1;
+                
+            elseif 100 <= y_map(i)
+                y_map(i) = 100;
+            end
+            
+            if map(y_map(i), x_map(i)) == 0
+                p(i) = 1; 
+            end     
+        end
+        
+        % Sorting the good vs the bad particles
+        bad = find(p==1);
+        good = find(p==0);
+        
+        % Correction applied to the bad pixels
+        for i = 1:size(bad)
+            pf(bad(i), :) = pf(randsample(good, 1), :) ...
+                + [rand * 0.2 - 0.1, rand * 0.2 - 0.1, ...
+                rand * 0.1 * pi / 180 - 0.05 * pi / 180];         
+        end
+        
+        % Mean of all the particles
+        M = [mean(pf(:, 1)), mean(pf(:, 2)), mean(pf(:, 3))];
+        
+        % Plot the map
+        imagesc([min_x max_x], [min_y max_y], map);
+        axis xy
+        hold on;
+        colormap(gray);
+        
+        % Plot on top of the map all the particles (blue)and the mean (red)
+        plot(pf(:, 1), pf(:, 2), 'bo', 'MarkerSize', 2, 'markerfacecolor', 'b')
+        hold on
+        plot(M(1), M(2), 'ro', 'MarkerSize', 2, 'markerfacecolor', 'r')
+        
+        % Controls of the robot set to move towards the wall
+        forwBackVel = gain * -1;
+        leftRightVel = 0;
+        rotVel = 0;
+        
+        % If threshold passed, wall if found
+        if min_value < wallDist
+            count = c;
+            state = 'start';
+            fprintf('changing FSM state to %s\n', state);
+        end
+    
+    % Moving along the wall state of the FSM  
+    elseif strcmp(state, 'start')
+       % Kalman Filter prediction
+       pf = [pf(:, 1) + (delta_position(1) * cos(pf(:, 3) + delta_orientation)...
+           - delta_position(2) * sin(pf(:, 3) + delta_orientation)),...
+             pf(:,2) + (delta_position(1) * sin(pf(:, 3) + delta_orientation)...
+             + delta_position(2) * cos(pf(:, 3) + delta_orientation)),...
+             pf(:, 3) + delta_orientation]...
+             + [rand * 0.001 - 0.0005, rand * 0.001 - 0.0005,...
+             rand * 0.001 * pi / 180 - 0.0005 * pi / 180];
+        
+        % Place particles in the pixels of the map  
+        x_map = uint8(round(size_x * ((pf(:, 1) - min_x) / (max_x - min_x))));
+        y_map = uint8(round(size_y * ((pf(:, 2) - min_y) / (max_y - min_x))));
+        
+        % Correct particles that get outside of the limits of the map
+        p = zeros(N, 1);
+        for i = 1:N
+            if x_map(i) <= 0
+                x_map(i) = 1;
+                
+            elseif 100 <= x_map(i)
+                x_map(i) = 100;
+            end              
+            
+            if y_map(i) <= 0
+                y_map(i) = 1;
+                
+            elseif 100 <= y_map(i)
+                y_map(i) = 100;
+            end
+            
+            if map(y_map(i), x_map(i)) == 0
+                p(i) = 1; 
+            end     
+        end
+        
+        % Sorting the good vs the bad particles
+        bad = find(p==1);
+        good = find(p==0);
+        
+        % Correction applied to the bad pixels
+        for i = 1:size(bad)
+            pf(bad(i), :) = pf(randsample(good,1),:) + ...
+                [rand * 0.1 - 0.05, rand * 0.1 - 0.05,...
+                rand * 0.1 * pi / 180 - 0.05 * pi / 180];         
+        end
+       
+       % Mean of all the particles
+       M = [mean(pf(:, 1)), mean(pf(:, 2)), mean(pf(:, 3))];
+       
+       % Count for plotting and reducing preformance consumption
+        count = count - 1;
+        if count == 0        
+            % plot the map
+            imagesc([min_x max_x], [min_y max_y], map);
+            axis xy
+            hold on;
+            colormap(gray);
+            
+            
+            plot(pf(:,1), pf(:,2), 'bo','MarkerSize',2,'markerfacecolor','b')
+            hold on
+            plot(M(1), M(2), 'ro','MarkerSize',2,'markerfacecolor','r')
+            count = c;
+        end
+        
+       % angle to the minimum distance
+       ang = (atan2(points(min_index,1), -points(min_index,2)));
+       % error with respect to the reference
+       e = wallDist - min_value;   
+       leftRightVel = -gain*points(min_index,2);
+       forwBackVel =  gain*(points(min_index,1) + e); 
+       % balance the rotation
+       if abs(rad2deg(ang)) < 1
+        rotVel = 0;
+       else       
+        rotVel = gainFi * ang;
+       end    
+    else
+        error('Unknown state %s.\n', state);
+    end
+end
